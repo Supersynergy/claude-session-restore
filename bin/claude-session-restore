@@ -1,0 +1,693 @@
+#!/usr/bin/env bash
+# =============================================================================
+# claude-session-restore v1.0.0
+# Cross-terminal session manager for Claude Code
+#
+# Works with: Ghostty, iTerm2, Terminal.app, Kitty, WezTerm, Alacritty, tmux
+# Requires:   macOS 12-15, python3, Claude Code CLI
+#
+# Commands:
+#   launch [plan.json]     Restore sessions (default: restore-all.json)
+#   new-plan [N] [out]     Auto-generate plan from N most recent Claude sessions
+#   save [name]            Save current state
+#   status                 Show tracked + live panes
+#   list                   Show saved sessions
+#   delete <name>          Delete a session
+#   detect                 Show detected terminal + capabilities
+#   trust [dir]            Set Claude workspace trust (skip confirmation)
+#   register-pane P CWD    Register pane (shell hook, internal)
+#   autosave               Silent auto-save (shell hook, internal)
+#   help                   Show this help
+# =============================================================================
+
+set -euo pipefail
+
+VERSION="1.0.0"
+SCRIPT_NAME="claude-session-restore"
+
+# --- Paths (XDG-compliant, portable) ---
+SESSION_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/ghostty-sessions"
+PANE_DIR="$SESSION_DIR/panes"
+NAMES_DIR="$SESSION_DIR/names"
+STATE_FILE="$SESSION_DIR/.state.json"
+LOCK_FILE="$SESSION_DIR/.restore.lock"
+RESTORE_FLAG="$SESSION_DIR/.restore_done"
+CLAUDE_PROJECTS_DIR="$HOME/.claude/projects"
+MAX_WINDOWS="${CLAUDE_SESSION_MAX_WINDOWS:-16}"
+
+mkdir -p "$SESSION_DIR" "$PANE_DIR" "$NAMES_DIR"
+
+# --- Colors (auto-disable for pipes) ---
+if [ -t 1 ]; then
+    G='\033[0;32m' C='\033[0;36m' Y='\033[1;33m' R='\033[0;31m'
+    D='\033[2m' B='\033[1m' N='\033[0m'
+else
+    G='' C='' Y='' R='' D='' B='' N=''
+fi
+
+# --- Portable stat (macOS + GNU Linux) ---
+_file_mtime() {
+    stat -f%m "$1" 2>/dev/null || stat -c%Y "$1" 2>/dev/null || echo 0
+}
+
+# =============================================================================
+# Terminal detection — fast, reliable, works everywhere
+# =============================================================================
+
+detect_terminal() {
+    # tmux first (runs inside any terminal)
+    [ -n "${TMUX:-}" ] && { echo "tmux"; return 0; }
+
+    # Terminal-specific env vars (fastest, set by terminal itself)
+    [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] && { echo "ghostty"; return 0; }
+    [ -n "${ITERM_SESSION_ID:-}" ]      && { echo "iterm2"; return 0; }
+    [ -n "${KITTY_PID:-}" ]             && { echo "kitty"; return 0; }
+    [ -n "${WEZTERM_PANE:-}" ]          && { echo "wezterm"; return 0; }
+    [ -n "${WARP_SHELL:-}" ]            && { echo "warp"; return 0; }
+
+    # $TERM_PROGRAM (macOS standard, set by most terminals)
+    case "${TERM_PROGRAM:-}" in
+        ghostty)        echo "ghostty" ;;
+        iTerm.app)      echo "iterm2" ;;
+        Apple_Terminal)  echo "terminal" ;;
+        Alacritty)      echo "alacritty" ;;
+        WezTerm)        echo "wezterm" ;;
+        WarpTerminal)   echo "warp" ;;
+        Hyper)          echo "hyper" ;;
+        *)
+            # $TERM value fallback
+            case "${TERM:-}" in
+                xterm-ghostty) echo "ghostty" ;;
+                xterm-kitty)   echo "kitty" ;;
+                alacritty)     echo "alacritty" ;;
+                wezterm)       echo "wezterm" ;;
+                *)             echo "unknown" ;;
+            esac
+            ;;
+    esac
+}
+
+# =============================================================================
+# Screen size detection (AppKit → osascript → fallback)
+# =============================================================================
+
+_detect_screen() {
+    # Try AppKit first (most accurate, macOS 12-15)
+    python3 -c "
+try:
+    from AppKit import NSScreen
+    f = NSScreen.mainScreen().frame()
+    print(int(f.size.width), int(f.size.height))
+except:
+    import subprocess, re
+    try:
+        r = subprocess.run(['osascript', '-e',
+            'tell application \"Finder\" to get bounds of window of desktop'],
+            capture_output=True, text=True, timeout=3)
+        nums = re.findall(r'\d+', r.stdout)
+        if len(nums) >= 4: print(int(nums[2]), int(nums[3]))
+        else: raise ValueError
+    except:
+        print(2056, 1329)
+" 2>/dev/null || echo "2056 1329"
+}
+
+# =============================================================================
+# Open a new terminal window — per-terminal dispatch
+# =============================================================================
+
+_open_window() {
+    local cwd="$1" cmd="${2:-}" window_id="${3:-win}" win_type="${4:-shell}"
+    local claude_sid="${5:-}" label="${6:-}"
+    local terminal
+
+    terminal=$(detect_terminal)
+    [ ! -d "$cwd" ] && cwd="$HOME"
+
+    # Pre-register name for shell hook
+    echo "$window_id" > "$NAMES_DIR/$$.name" 2>/dev/null || true
+
+    # OSC 0 title escape + GHOSTTY_SESSION_NAME export
+    local title_esc="printf '\\033]0;${window_id}\\007'"
+    local name_export="export GHOSTTY_SESSION_NAME='${window_id}'"
+    local setup="cd '${cwd}' && ${name_export} && ${title_esc}"
+
+    # Build full command
+    local full_cmd="${setup}"
+    if [ "$win_type" = "claude" ] && [ -n "$cmd" ]; then
+        full_cmd="${setup} && ${cmd}"
+    elif [ -n "$cmd" ]; then
+        full_cmd="${setup} && ${cmd}"
+    fi
+
+    case "$terminal" in
+        ghostty)
+            osascript -e "
+tell application \"Ghostty\" to activate
+delay 0.2
+tell application \"System Events\"
+    keystroke \"n\" using command down
+    delay 0.5
+    keystroke \"${full_cmd}\"
+    key code 36
+end tell" 2>/dev/null || true
+            ;;
+
+        iterm2)
+            osascript -e "
+tell application \"iTerm2\"
+    activate
+    set newWin to (create window with default profile)
+    tell current session of newWin
+        write text \"${full_cmd}\"
+    end tell
+end tell" 2>/dev/null || true
+            ;;
+
+        terminal)
+            osascript -e "
+tell application \"Terminal\"
+    activate
+    do script \"${full_cmd}\"
+end tell" 2>/dev/null || true
+            ;;
+
+        kitty)
+            if command -v kitty &>/dev/null; then
+                kitty @ launch --type=os-window --title="$window_id" \
+                    --cwd="$cwd" bash -c "$full_cmd; exec \$SHELL" 2>/dev/null || \
+                osascript -e "
+tell application \"kitty\" to activate
+delay 0.2
+tell application \"System Events\"
+    keystroke \"n\" using command down
+    delay 0.5
+    keystroke \"${full_cmd}\"
+    key code 36
+end tell" 2>/dev/null || true
+            fi
+            ;;
+
+        wezterm)
+            if command -v wezterm &>/dev/null; then
+                wezterm cli spawn --new-window --cwd "$cwd" -- \
+                    bash -c "$full_cmd; exec \$SHELL" 2>/dev/null || true
+            fi
+            ;;
+
+        alacritty)
+            if command -v alacritty &>/dev/null; then
+                alacritty --working-directory "$cwd" -e bash -c "$full_cmd; exec \$SHELL" &
+                disown 2>/dev/null || true
+            fi
+            ;;
+
+        tmux)
+            tmux new-window -n "$window_id" "$full_cmd; exec \$SHELL" 2>/dev/null || true
+            ;;
+
+        *)
+            # Universal fallback: osascript with frontmost app
+            osascript -e "
+tell application \"System Events\"
+    keystroke \"n\" using command down
+    delay 0.5
+    keystroke \"${full_cmd}\"
+    key code 36
+end tell" 2>/dev/null || true
+            ;;
+    esac
+
+    _update_state "add" "$window_id" "$cwd" "$claude_sid" "$win_type" "$window_id"
+    echo -e "  ${C}[$window_id]${N}  ${label:-$cwd}  ${D}[$win_type via $terminal]${N}"
+}
+
+# =============================================================================
+# State management (atomic writes)
+# =============================================================================
+
+_update_state() {
+    local action="$1"
+    local arg1="${2:-}" arg2="${3:-}" arg3="${4:-}" arg4="${5:-shell}" arg5="${6:-}"
+    python3 -c "
+import json, os, time
+sf = '$STATE_FILE'
+try:    state = json.load(open(sf))
+except: state = {'windows': [], 'last_restore': '', 'version': '$VERSION'}
+action = '$action'
+if action == 'clear':
+    state['windows'] = []
+elif action == 'add':
+    state['windows'].append({
+        'window_id': '$arg1', 'cwd': '$arg2', 'claude_session': '$arg3',
+        'type': '$arg4', 'name': '$arg5',
+        'opened_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+    })
+elif action == 'set_restore':
+    state['last_restore'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    state['restore_pid'] = os.getpid()
+state['updated_at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+state['version'] = '$VERSION'
+tmp = sf + '.tmp'
+with open(tmp, 'w') as f: json.dump(state, f, indent=2)
+os.replace(tmp, sf)
+" 2>/dev/null || true
+}
+
+# =============================================================================
+# Lock (prevents concurrent restores)
+# =============================================================================
+
+_acquire_lock() {
+    if [ -f "$LOCK_FILE" ]; then
+        local lock_pid lock_age
+        lock_pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "0")
+        lock_age=$(( $(date +%s) - $(_file_mtime "$LOCK_FILE") ))
+        if kill -0 "$lock_pid" 2>/dev/null && [ "$lock_age" -lt 60 ]; then
+            echo -e "${Y}Another restore running (PID $lock_pid). Skipping.${N}"
+            return 1
+        fi
+        rm -f "$LOCK_FILE"
+    fi
+    echo "$$" > "$LOCK_FILE"
+}
+
+_release_lock() { rm -f "$LOCK_FILE"; }
+
+# =============================================================================
+# Claude session resolver
+# =============================================================================
+
+find_claude_session() {
+    local cwd="$1"
+    local hash
+    hash=$(echo "$cwd" | sed 's|/|-|g')
+    local project_dir="$CLAUDE_PROJECTS_DIR/$hash"
+    if [ -d "$project_dir" ]; then
+        local latest
+        latest=$(ls -t "$project_dir"/*.jsonl 2>/dev/null | head -1)
+        [ -n "$latest" ] && basename "$latest" .jsonl && return 0
+    fi
+    return 1
+}
+
+# =============================================================================
+# Pane registry (called by shell hook)
+# =============================================================================
+
+register_pane() {
+    local shell_pid="${1:-$$}" cwd="${2:-$PWD}"
+    local claude_session="" session_name=""
+    local claude_pid
+    claude_pid=$(pgrep -P "$shell_pid" -f "claude" 2>/dev/null | head -1 || true)
+
+    if [ -n "$claude_pid" ]; then
+        local cmd
+        cmd=$(ps -p "$claude_pid" -o args= 2>/dev/null || true)
+        claude_session=$(echo "$cmd" | sed -n 's/.*--resume[= ]\([^ ]*\).*/\1/p' 2>/dev/null || true)
+        session_name=$(echo "$cmd" | sed -n "s/.*--name[= ]['\"]*\([^'\"]*\).*/\1/p" 2>/dev/null || true)
+        [ -z "$claude_session" ] && claude_session=$(find_claude_session "$cwd" 2>/dev/null || true)
+    fi
+
+    [ -z "$session_name" ] && [ -f "$NAMES_DIR/${shell_pid}.name" ] && \
+        session_name=$(cat "$NAMES_DIR/${shell_pid}.name" 2>/dev/null || true)
+
+    local dst="$PANE_DIR/${shell_pid}.json" tmp="${dst}.tmp"
+    cat > "$tmp" 2>/dev/null << EOF
+{"pid":$shell_pid,"cwd":"$cwd","name":"${session_name:-}","claude_session":"${claude_session:-}","claude_running":${claude_pid:+true}${claude_pid:-false},"ts":$(date +%s)}
+EOF
+    mv "$tmp" "$dst" 2>/dev/null || true
+}
+
+# =============================================================================
+# Save session
+# =============================================================================
+
+save_session() {
+    local name="${1:-default}" quiet="${2:-}"
+    for f in "$PANE_DIR"/*.json; do
+        [ ! -f "$f" ] && continue
+        local pid
+        pid=$(python3 -c "import json; print(json.load(open('$f'))['pid'])" 2>/dev/null || echo "0")
+        kill -0 "$pid" 2>/dev/null || rm -f "$f"
+    done
+
+    python3 << 'PYEOF'
+import json, glob, os, datetime
+
+pane_dir = os.environ.get("_PANE_DIR", os.path.expanduser("~/.local/share/ghostty-sessions/panes"))
+session_dir = os.environ.get("_SESSION_DIR", os.path.expanduser("~/.local/share/ghostty-sessions"))
+
+panes = []
+for f in sorted(glob.glob(os.path.join(pane_dir, "*.json")), key=os.path.getmtime):
+    try: panes.append(json.load(open(f)))
+    except: pass
+
+restore, seen = [], set()
+for p in panes:
+    cwd = p.get("cwd", "")
+    if not cwd or cwd in seen: continue
+    seen.add(cwd)
+    restore.append({
+        "cwd": cwd, "name": p.get("name", ""),
+        "claude_session": p.get("claude_session", ""),
+        "claude_running": p.get("claude_running", False),
+    })
+
+session = {
+    "name": os.environ["_NAME"],
+    "version": os.environ["_VERSION"],
+    "saved_at": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "panes": panes, "restore_plan": restore,
+}
+outf = os.path.join(session_dir, os.environ["_NAME"] + ".json")
+with open(outf, "w") as f: json.dump(session, f, indent=2)
+
+if os.environ.get("_QUIET") != "quiet":
+    cn = sum(1 for r in restore if r.get("claude_session"))
+    print(f'Session "{os.environ["_NAME"]}" saved — {len(panes)} panes, {cn} Claude sessions')
+PYEOF
+}
+
+# =============================================================================
+# Launch plan — the main restore command
+# =============================================================================
+
+launch_plan() {
+    local plan_file="${1:-$SESSION_DIR/restore-all.json}"
+    [ ! -f "$plan_file" ] && { echo -e "${R}Plan not found: $plan_file${N}"; return 1; }
+
+    _acquire_lock || return 0
+    trap '_release_lock' RETURN
+    touch "$RESTORE_FLAG"
+    _update_state "clear"
+    _update_state "set_restore"
+
+    local terminal
+    terminal=$(detect_terminal)
+    echo -e "${B}$SCRIPT_NAME v$VERSION${N}"
+    echo -e "  ${D}Terminal: $terminal | Plan: $(basename "$plan_file")${N}\n"
+
+    local total
+    total=$(python3 -c "import json; print(len(json.load(open('$plan_file'))['windows']))" 2>/dev/null || echo 0)
+
+    local tmpdata
+    tmpdata=$(mktemp)
+    python3 -c "
+import json, re
+data = json.load(open('$plan_file'))
+for w in data['windows']:
+    cmd = w.get('cmd', '')
+    wid = w.get('id', 'session')
+    label = w.get('label', wid)
+    if cmd and 'claude' in cmd and w.get('type') == 'claude':
+        if '--name' not in cmd:
+            cmd += f\" --name '{wid}'\"
+        if '--dangerously-skip-permissions' not in cmd:
+            cmd += ' --dangerously-skip-permissions'
+    print(f\"{w['cwd']}|{cmd}|{wid}|{w.get('type','shell')}|{w.get('claude_session','')}|{label}\")
+" > "$tmpdata" 2>/dev/null || { echo -e "${R}Failed to parse plan${N}"; rm -f "$tmpdata"; return 1; }
+
+    local win_idx=0
+    while IFS='|' read -r cwd cmd wid wtype csid label; do
+        [ -z "$cwd" ] && continue
+        win_idx=$((win_idx + 1))
+        [ "$win_idx" -gt "$MAX_WINDOWS" ] && { echo -e "  ${Y}Limit ($MAX_WINDOWS)${N}"; break; }
+
+        if [ "$win_idx" -eq 1 ]; then
+            [ -d "$cwd" ] && builtin cd "$cwd" 2>/dev/null || true
+            export GHOSTTY_SESSION_NAME="$wid"
+            printf '\033]0;%s\033\\' "$wid"
+            echo -e "  ${C}[$wid]${N}  ${label}  ${D}[current window]${N}"
+            _update_state "add" "$wid" "$cwd" "${csid:-}" "$wtype" "$wid"
+            if [ -n "$cmd" ]; then
+                echo "$cmd" > "$SESSION_DIR/.pending_cmd"
+                echo -e "      ${G}→${N} ${D}${cmd}${N}"
+            fi
+        else
+            _open_window "$cwd" "$cmd" "$wid" "$wtype" "${csid:-}" "$label"
+            sleep 0.4
+        fi
+    done < "$tmpdata"
+
+    rm -f "$tmpdata"
+    echo -e "\n${G}Launched $total sessions via $terminal${N}"
+}
+
+# =============================================================================
+# new-plan — auto-generate plan from N most recent Claude sessions
+# =============================================================================
+
+new_plan() {
+    local count="${1:-12}"
+    local output="${2:-$SESSION_DIR/restore-all.json}"
+
+    python3 << PYEOF
+import json, glob, os, re, datetime
+
+projects_dir = os.path.expanduser("~/.claude/projects")
+sessions, seen = [], set()
+
+for f in sorted(glob.glob(os.path.join(projects_dir, "*", "*.jsonl")), key=os.path.getmtime, reverse=True):
+    if "/subagents/" in f: continue
+    sid = os.path.basename(f).replace(".jsonl", "")
+    if sid in seen: continue
+    seen.add(sid)
+
+    proj_dir = os.path.basename(os.path.dirname(f))
+    cwd = proj_dir.replace("-", "/").lstrip("/")
+    if not cwd.startswith("/"): cwd = "/" + cwd
+    if not os.path.isdir(cwd): cwd = os.path.expanduser("~")
+
+    # Extract title from first real user message
+    title = ""
+    try:
+        with open(f) as fh:
+            for line in fh:
+                d = json.loads(line)
+                if d.get("type") == "summary":
+                    title = d.get("summary", "")[:50]; break
+                if d.get("type") == "user":
+                    msg = d.get("message", {})
+                    content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
+                    if isinstance(content, list):
+                        content = next((c.get("text","") for c in content if c.get("type")=="text"), "")
+                    content = re.sub(r'<[^>]+>', '', content).strip()
+                    skip = ("caveat", "[request", "resume", "system", "/model", "/resume", "/release")
+                    if content and not any(content.lower().startswith(s) for s in skip):
+                        title = content[:50]; break
+    except: pass
+    if not title: title = f"Session {sid[:8]}"
+
+    sessions.append({"sid": sid, "cwd": cwd, "title": title, "size": os.path.getsize(f)})
+    if len(sessions) >= $count: break
+
+windows = []
+for i, s in enumerate(sessions):
+    wid = f"s{i+1}-{s['sid'][:8]}"
+    size_mb = f"{s['size'] / 1048576:.1f}M"
+    windows.append({
+        "id": wid, "type": "claude", "cwd": s["cwd"],
+        "cmd": f"claude --resume {s['sid']}",
+        "claude_session": s["sid"],
+        "label": f"{s['title']} ({size_mb})",
+    })
+
+plan = {
+    "name": "restore-all",
+    "description": f"Auto-generated: {len(windows)} sessions",
+    "created": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "windows": windows
+}
+with open("$output", "w") as f: json.dump(plan, f, indent=2)
+
+print(f"Generated: {len(windows)} sessions -> $output")
+for w in windows: print(f"  [{w['id']}]  {w['label']}")
+PYEOF
+}
+
+# =============================================================================
+# Trust — set Claude workspace trust (skip confirmation dialog)
+# =============================================================================
+
+trust_workspace() {
+    local dir="${1:-$HOME}"
+    python3 -c "
+import json, os
+f = os.path.expanduser('~/.claude.json')
+try: data = json.load(open(f))
+except: data = {}
+proj = data.setdefault('projects', {}).setdefault('$dir', {})
+proj['hasTrustDialogAccepted'] = True
+with open(f, 'w') as out: json.dump(data, out, indent=2)
+print(f'Trust set to true for $dir')
+" 2>/dev/null
+}
+
+# =============================================================================
+# Detect — show terminal info + capabilities
+# =============================================================================
+
+show_detect() {
+    local term
+    term=$(detect_terminal)
+    echo -e "${B}$SCRIPT_NAME v$VERSION — Terminal Detection${N}\n"
+    echo -e "  Terminal:    ${G}$term${N}"
+    echo -e "  TERM:        ${TERM:-unset}"
+    echo -e "  TERM_PROGRAM: ${TERM_PROGRAM:-unset}"
+    echo ""
+
+    echo -e "  ${B}Capabilities:${N}"
+    case "$term" in
+        ghostty)  echo "    Window: osascript (Cmd+N + keystroke)" ;;
+        iterm2)   echo "    Window: AppleScript (create window + write text)" ;;
+        terminal) echo "    Window: AppleScript (do script)" ;;
+        kitty)    echo "    Window: kitty @ launch --type=os-window" ;;
+        wezterm)  echo "    Window: wezterm cli spawn --new-window" ;;
+        tmux)     echo "    Window: tmux new-window -n <name>" ;;
+        *)        echo "    Window: osascript fallback (Cmd+N + keystroke)" ;;
+    esac
+    echo "    Title:  OSC 0 escape sequence (universal)"
+    echo "    Claude: --name + --dangerously-skip-permissions (auto-injected)"
+}
+
+# =============================================================================
+# Status
+# =============================================================================
+
+show_status() {
+    local term
+    term=$(detect_terminal)
+    echo -e "${B}$SCRIPT_NAME v$VERSION${N}  ${D}[$term]${N}\n"
+
+    if [ -f "$STATE_FILE" ]; then
+        python3 -c "
+import json
+state = json.load(open('$STATE_FILE'))
+print(f'Last restore: {state.get(\"last_restore\", \"never\")}')
+print(f'Tracked: {len(state.get(\"windows\", []))} windows')
+print()
+for w in state.get('windows', []):
+    name = w.get('name', '') or w.get('window_id', '?')
+    cwd = w.get('cwd', '?').replace('$HOME', '~')
+    csid = w.get('claude_session', '')[:8]
+    icon = '●' if w.get('type') == 'claude' else '○'
+    print(f'  {icon} {name:<24s} {cwd:<30s} {\"sid:\" + csid if csid else \"\"}')
+" 2>/dev/null
+    fi
+
+    echo ""
+    echo -e "${B}Live Panes:${N}"
+    python3 -c "
+import json, glob, os
+alive = 0
+for f in sorted(glob.glob('$PANE_DIR/*.json'), key=os.path.getmtime, reverse=True):
+    try:
+        p = json.load(open(f))
+        pid = p.get('pid', 0)
+        try: os.kill(pid, 0)
+        except: continue
+        alive += 1
+        name = p.get('name', '')
+        if not name:
+            nf = os.path.join('$NAMES_DIR', f'{pid}.name')
+            if os.path.exists(nf): name = open(nf).read().strip()
+        cwd = p.get('cwd', '?').replace('$HOME', '~')
+        claude = p.get('claude_session', '')[:8]
+        icon = '●' if p.get('claude_running') else '○'
+        print(f'  {icon} {name or \"(unnamed)\":<24s} {cwd:<30s} {\"sid:\" + claude if claude else \"\"}')
+    except: pass
+print(f'  ({alive} live)') if alive else print('  (none)')
+" 2>/dev/null
+}
+
+# =============================================================================
+# List / Delete / Help
+# =============================================================================
+
+list_sessions() {
+    local has=false
+    for f in "$SESSION_DIR"/*.json; do [ -f "$f" ] && has=true && break; done
+    $has || { echo -e "${Y}No saved sessions${N}"; return 0; }
+
+    printf "\n  %-22s %-18s %-6s %-8s\n" "NAME" "SAVED" "PANES" "CLAUDE"
+    printf "  %-22s %-18s %-6s %-8s\n" "────" "─────" "─────" "──────"
+    for f in "$SESSION_DIR"/*.json; do
+        [ ! -f "$f" ] && continue
+        local name
+        name=$(basename "$f" .json)
+        [[ "$name" == .* ]] && [ "$name" != ".autosave" ] && continue
+        [ "$name" = ".autosave" ] && name="(autosave)"
+        python3 -c "
+import json
+data = json.load(open('$f'))
+wins = data.get('restore_plan', data.get('windows', data.get('panes', [])))
+claude = sum(1 for r in wins if r.get('claude_session'))
+saved = data.get('saved_at', data.get('created', '?'))[:16].replace('T', ' ')
+print(f'  {\"$name\":<22s} {saved:<18s} {len(wins):<6d} {claude:<8d}')
+" 2>/dev/null
+    done
+    echo ""
+}
+
+delete_session() {
+    local name="${1:-}"
+    [ -z "$name" ] && { echo -e "${R}Usage: $SCRIPT_NAME delete <name>${N}"; return 1; }
+    rm -f "$SESSION_DIR/${name}.json" && echo -e "${G}Deleted: $name${N}"
+}
+
+show_help() {
+    cat << HELP
+$SCRIPT_NAME v$VERSION — Cross-terminal session manager for Claude Code
+
+USAGE:  $(basename "$0") <command> [args]
+
+  launch [plan.json]   Restore sessions (default: restore-all.json)
+  new-plan [N] [out]   Generate plan from N most recent Claude sessions
+  save [name]          Save current state
+  status               Show tracked + live panes
+  list                 Show saved sessions
+  delete <name>        Delete a session
+  detect               Show detected terminal + capabilities
+  trust [dir]          Set Claude workspace trust (default: ~)
+  help                 This help
+
+TERMINALS:  Ghostty, iTerm2, Terminal.app, Kitty, WezTerm, Alacritty, tmux
+REQUIRES:   macOS 12-15, python3, Claude Code CLI
+
+ENVIRONMENT:
+  CLAUDE_SESSION_MAX_WINDOWS   Max windows to restore (default: 16)
+
+ALIASES (add to ~/.zshrc):
+  alias ccrestore='$(basename "$0") launch'
+  alias ccsave='$(basename "$0") save'
+  alias ccstatus='$(basename "$0") status'
+  alias ccplan='$(basename "$0") new-plan'
+HELP
+}
+
+# =============================================================================
+# Main dispatch
+# =============================================================================
+
+# Export for python subprocesses
+export _PANE_DIR="$PANE_DIR" _SESSION_DIR="$SESSION_DIR" _VERSION="$VERSION"
+export _NAME="${2:-default}" _QUIET="${3:-}"
+
+case "${1:-help}" in
+    launch)         launch_plan "${2:-}" ;;
+    new-plan)       new_plan "${2:-12}" "${3:-$SESSION_DIR/restore-all.json}" ;;
+    save)           save_session "${2:-default}" "${3:-}" ;;
+    restore)        launch_plan "$SESSION_DIR/${2:-default}.json" ;;
+    detect)         show_detect ;;
+    trust)          trust_workspace "${2:-$HOME}" ;;
+    status)         show_status ;;
+    list|ls)        list_sessions ;;
+    delete|rm)      delete_session "${2:-}" ;;
+    autosave)       save_session ".autosave" "quiet" ;;
+    auto-restore)   [ -f "$SESSION_DIR/.autosave.json" ] && launch_plan "$SESSION_DIR/.autosave.json" ;;
+    register-pane)  register_pane "${2:-$$}" "${3:-$PWD}" ;;
+    version|-v)     echo "$SCRIPT_NAME v$VERSION" ;;
+    help|-h|--help) show_help ;;
+    *)              echo -e "${R}Unknown: $1${N}"; show_help; exit 1 ;;
+esac

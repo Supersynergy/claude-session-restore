@@ -1,0 +1,39 @@
+{
+  "name": "example-plan",
+  "description": "Example restore plan with 4 sessions — edit paths and session IDs for your setup",
+  "created": "2026-01-01T00:00:00Z",
+  "windows": [
+    {
+      "id": "s1-main-project",
+      "type": "claude",
+      "cwd": "/Users/yourname/projects/my-app",
+      "cmd": "claude --resume abc123def456",
+      "claude_session": "abc123def456",
+      "label": "Main app — feature/auth branch"
+    },
+    {
+      "id": "s2-api-server",
+      "type": "claude",
+      "cwd": "/Users/yourname/projects/api-server",
+      "cmd": "claude --resume 789xyz000111",
+      "claude_session": "789xyz000111",
+      "label": "API server — refactor endpoints"
+    },
+    {
+      "id": "s3-docs",
+      "type": "claude",
+      "cwd": "/Users/yourname/projects/docs-site",
+      "cmd": "claude",
+      "claude_session": "",
+      "label": "Docs — new claude session"
+    },
+    {
+      "id": "s4-shell",
+      "type": "shell",
+      "cwd": "/Users/yourname",
+      "cmd": "",
+      "claude_session": "",
+      "label": "General shell"
+    }
+  ]
+}
