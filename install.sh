@@ -74,9 +74,32 @@ EOF
     launchctl unload "$PLIST" 2>/dev/null || true
     launchctl load "$PLIST" 2>/dev/null && \
         echo -e "${G}✓${N} Shim-Guard launchd loaded (self-heal vs claude-update)" || true
+elif command -v systemctl &>/dev/null; then
+    # Linux: systemd --user timer (Aequivalent zum macOS launchd-Guard)
+    UD="$HOME/.config/systemd/user"; mkdir -p "$UD"
+    cat > "$UD/claude-shim-guard.service" <<EOF
+[Unit]
+Description=claude-session-restore shim self-heal
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $CB/claude-shim-guard.sh
+EOF
+    cat > "$UD/claude-shim-guard.timer" <<EOF
+[Unit]
+Description=Run claude shim-guard every 2 min
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=120
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl --user daemon-reload 2>/dev/null || true
+    systemctl --user enable --now claude-shim-guard.timer 2>/dev/null && \
+        echo -e "${G}✓${N} Shim-Guard systemd-timer aktiviert (self-heal)" || \
+        echo -e "${Y}!${N} systemd-timer angelegt, enable manuell: systemctl --user enable --now claude-shim-guard.timer"
 else
-    echo -e "${Y}!${N} Non-macOS: Guard-Launchd uebersprungen — Shim aktiv, "
-    echo -e "  fuer Self-Heal cron einrichten: */2 * * * * bash $CB/claude-shim-guard.sh"
+    echo -e "${Y}!${N} Kein launchd/systemd — Shim aktiv, Self-Heal via cron:"
+    echo -e "  (crontab -l 2>/dev/null; echo '*/2 * * * * bash $CB/claude-shim-guard.sh') | crontab -"
 fi
 
 # --- 2. Install shell hook ---

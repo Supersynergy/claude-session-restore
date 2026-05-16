@@ -222,14 +222,27 @@ end tell" 2>/dev/null || true
             ;;
 
         *)
-            # Universal fallback: osascript with frontmost app
-            osascript -e "
+            if [ "$(uname)" = "Darwin" ]; then
+                # macOS universal fallback: osascript frontmost app
+                osascript -e "
 tell application \"System Events\"
     keystroke \"n\" using command down
     delay 0.5
     keystroke \"${full_cmd}\"
     key code 36
 end tell" 2>/dev/null || true
+            else
+                # Linux fallback: erstes verfuegbares Terminal mit -e
+                local lt
+                for lt in x-terminal-emulator "${TERMINAL:-}" gnome-terminal \
+                          konsole xfce4-terminal alacritty kitty foot xterm; do
+                    [ -z "$lt" ] && continue
+                    command -v "$lt" &>/dev/null || continue
+                    setsid "$lt" -e bash -c "$full_cmd; exec \$SHELL" &>/dev/null &
+                    disown 2>/dev/null || true
+                    break
+                done
+            fi
             ;;
     esac
 
