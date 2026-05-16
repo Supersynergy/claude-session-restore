@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 G='\033[0;32m' C='\033[0;36m' Y='\033[1;33m' R='\033[0;31m' B='\033[1m' N='\033[0m'
@@ -26,6 +26,58 @@ fi
 
 # Also create ghostty-session alias for backward compatibility
 ln -sf "$INSTALL_DIR/claude-session-restore" "$INSTALL_DIR/ghostty-session" 2>/dev/null || true
+
+# --- 1.5. Install resume-safe Shim + Guard (v1.1 — der eigentliche Fix) ---
+# claude --resume <id> ist projekt-scoped. Wird ein Pane mit anderer cwd
+# restored als beim Session-Start -> "No conversation found". Der Shim faengt
+# --resume ab und macht es cwd-unabhaengig. Funktioniert fuer JEDES Terminal.
+CB="$HOME/.claude/bin"; mkdir -p "$CB" "$HOME/.claude/logs"
+cp "$SCRIPT_DIR/shim/claude-resume-safe-shim.sh" "$CB/claude-resume-safe-shim.sh"
+cp "$SCRIPT_DIR/shim/claude-shim-guard.sh"       "$CB/claude-shim-guard.sh"
+chmod +x "$CB/claude-resume-safe-shim.sh" "$CB/claude-shim-guard.sh"
+
+# claude-real auf echtes Binary sichern (vor Shim-Install)
+if [ -L "$INSTALL_DIR/claude" ]; then
+    tgt="$(readlink "$INSTALL_DIR/claude")"
+    [ -n "$tgt" ] && [ -x "$tgt" ] && ln -sfn "$tgt" "$INSTALL_DIR/claude-real"
+fi
+if [ ! -e "$INSTALL_DIR/claude-real" ]; then
+    nv="$(ls -1 "$HOME/.local/share/claude/versions" 2>/dev/null | sort -V | tail -1)"
+    [ -n "$nv" ] && ln -sfn "$HOME/.local/share/claude/versions/$nv" "$INSTALL_DIR/claude-real"
+fi
+
+if ! grep -q "claude resume-safe shim" "$INSTALL_DIR/claude" 2>/dev/null; then
+    rm -f "$INSTALL_DIR/claude"
+    cp "$CB/claude-resume-safe-shim.sh" "$INSTALL_DIR/claude"
+    chmod +x "$INSTALL_DIR/claude"
+    echo -e "${G}✓${N} resume-safe Shim installed: ${C}${INSTALL_DIR}/claude${N}"
+else
+    echo -e "${G}✓${N} resume-safe Shim already active"
+fi
+
+# Guard-Launchd (macOS): heilt Shim nach Claude-Self-Update + faengt Rivalen
+if [ "$(uname)" = "Darwin" ]; then
+    PLIST="$HOME/Library/LaunchAgents/com.supersynergy.claude-shim-guard.plist"
+    cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.supersynergy.claude-shim-guard</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string><string>$CB/claude-shim-guard.sh</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>120</integer>
+  <key>StandardErrorPath</key><string>$HOME/.claude/logs/claude-shim-guard.err</string>
+  <key>StandardOutPath</key><string>$HOME/.claude/logs/claude-shim-guard.out</string>
+</dict></plist>
+EOF
+    launchctl unload "$PLIST" 2>/dev/null || true
+    launchctl load "$PLIST" 2>/dev/null && \
+        echo -e "${G}✓${N} Shim-Guard launchd loaded (self-heal vs claude-update)" || true
+else
+    echo -e "${Y}!${N} Non-macOS: Guard-Launchd uebersprungen — Shim aktiv, "
+    echo -e "  fuer Self-Heal cron einrichten: */2 * * * * bash $CB/claude-shim-guard.sh"
+fi
 
 # --- 2. Install shell hook ---
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/ghostty-sessions"

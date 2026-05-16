@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 SCRIPT_NAME="claude-session-restore"
 
 # --- Paths (XDG-compliant, portable) ---
@@ -55,7 +55,10 @@ _file_mtime() {
 # =============================================================================
 
 detect_terminal() {
-    # tmux first (runs inside any terminal)
+    # cmux first (own multiplexer, native layout restore)
+    [ -n "${CMUX_SURFACE_ID:-}" ] && { echo "cmux"; return 0; }
+
+    # tmux next (runs inside any terminal)
     [ -n "${TMUX:-}" ] && { echo "tmux"; return 0; }
 
     # Terminal-specific env vars (fastest, set by terminal itself)
@@ -199,6 +202,18 @@ end tell" 2>/dev/null || true
             if command -v alacritty &>/dev/null; then
                 alacritty --working-directory "$cwd" -e bash -c "$full_cmd; exec \$SHELL" &
                 disown 2>/dev/null || true
+            fi
+            ;;
+
+        cmux)
+            # cmux hat nativen Layout-Restore; delegiere ans cmux-vault toolchain.
+            # Der resume-safe Shim macht claude --resume ohnehin cwd-unabhaengig.
+            if command -v cmux-claude-resume-all &>/dev/null; then
+                cmux-claude-resume-all 2>/dev/null || true
+            elif command -v cmux-restore &>/dev/null; then
+                cmux-restore 2>/dev/null || true
+            else
+                echo -e "  ${Y}cmux erkannt, aber cmux-vault toolchain fehlt im PATH${N}"
             fi
             ;;
 
@@ -454,17 +469,18 @@ for f in sorted(glob.glob(os.path.join(projects_dir, "*", "*.jsonl")), key=os.pa
     if sid in seen: continue
     seen.add(sid)
 
-    proj_dir = os.path.basename(os.path.dirname(f))
-    cwd = proj_dir.replace("-", "/").lstrip("/")
-    if not cwd.startswith("/"): cwd = "/" + cwd
-    if not os.path.isdir(cwd): cwd = os.path.expanduser("~")
-
-    # Extract title from first real user message
+    # cwd AUTHORITATIV aus dem jsonl lesen (proj_dir.replace ist lossy:
+    # Pfade mit '-' oder '.' liessen sich nicht zurueckmappen -> resume
+    # schlug fehl. Der Shim faengt's ab, hier trotzdem an der Quelle fixen.)
+    cwd = ""
     title = ""
     try:
         with open(f) as fh:
             for line in fh:
                 d = json.loads(line)
+                if not cwd:
+                    c = d.get("cwd")
+                    if isinstance(c, str) and c: cwd = c
                 if d.get("type") == "summary":
                     title = d.get("summary", "")[:50]; break
                 if d.get("type") == "user":
@@ -477,6 +493,10 @@ for f in sorted(glob.glob(os.path.join(projects_dir, "*", "*.jsonl")), key=os.pa
                     if content and not any(content.lower().startswith(s) for s in skip):
                         title = content[:50]; break
     except: pass
+    if not cwd or not os.path.isdir(cwd):
+        # Fallback: lossy proj_dir-Reversal, dann ~ (Shim rettet resume eh)
+        pd = os.path.basename(os.path.dirname(f)).replace("-", "/").lstrip("/")
+        cwd = ("/" + pd) if os.path.isdir("/" + pd) else os.path.expanduser("~")
     if not title: title = f"Session {sid[:8]}"
 
     sessions.append({"sid": sid, "cwd": cwd, "title": title, "size": os.path.getsize(f)})
@@ -652,8 +672,12 @@ USAGE:  $(basename "$0") <command> [args]
   trust [dir]          Set Claude workspace trust (default: ~)
   help                 This help
 
-TERMINALS:  Ghostty, iTerm2, Terminal.app, Kitty, WezTerm, Alacritty, tmux
+TERMINALS:  cmux, Ghostty, iTerm2, Terminal.app, Kitty, WezTerm, Alacritty, tmux
 REQUIRES:   macOS 12-15, python3, Claude Code CLI
+
+v1.1: resume-safe Shim macht 'claude --resume' cwd-unabhaengig (fixt
+      "No conversation found") + Guard-Launchd (self-heal vs claude-update)
+      + cmux-Support. Shim greift fuer JEDES Terminal, nicht nur die o.g.
 
 ENVIRONMENT:
   CLAUDE_SESSION_MAX_WINDOWS   Max windows to restore (default: 16)
