@@ -1,5 +1,9 @@
 # claude-session-restore
 
+<p align="center">
+  <img src=".github/social-preview.png" alt="claude-session-restore — one command brings every Claude Code session back, in any terminal" width="820">
+</p>
+
 > **One command brings every Claude Code session back — in any terminal.**
 
 [![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)](https://github.com/supersynergy/claude-session-restore/releases)

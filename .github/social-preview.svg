@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" font-family="ui-monospace,'SF Mono',Menlo,Consolas,monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1117"/>
+      <stop offset="1" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#d97757"/>
+      <stop offset="1" stop-color="#e8a87c"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="6" fill="url(#accent)"/>
+
+  <!-- title -->
+  <text x="80" y="132" font-size="58" font-weight="700" fill="#f0f6fc">claude-session-restore</text>
+  <text x="80" y="190" font-size="29" fill="#8b949e">One command brings every Claude Code session back —</text>
+  <text x="80" y="230" font-size="29" fill="#8b949e">in <tspan fill="#e8a87c" font-weight="700">any</tspan> terminal.</text>
+
+  <!-- terminal card -->
+  <rect x="80" y="272" width="1120" height="252" rx="12" fill="#010409" stroke="#30363d" stroke-width="1.5"/>
+  <circle cx="106" cy="298" r="6" fill="#ff5f56"/>
+  <circle cx="126" cy="298" r="6" fill="#ffbd2e"/>
+  <circle cx="146" cy="298" r="6" fill="#27c93f"/>
+  <text x="600" y="303" font-size="15" fill="#484f58" text-anchor="middle">ghostty · zsh</text>
+
+  <text x="108" y="352" font-size="22" fill="#7ee787">$ <tspan fill="#f0f6fc">csr rescue</tspan></text>
+  <text x="108" y="392" font-size="20" fill="#8b949e">terminal: ghostty · top 10 + 5 leverage picks</text>
+  <text x="108" y="430" font-size="20" fill="#58a6ff">Generated 15 sessions <tspan fill="#6e7681">(10 recent + 5 leverage · 3 skipped)</tspan></text>
+  <text x="108" y="466" font-size="20" fill="#c9d1d9">  [s2]  <tspan fill="#e8a87c">★</tspan> fix prod outage — payments 500s</text>
+  <text x="108" y="500" font-size="20" fill="#7ee787">Launched 15 sessions via ghostty ✓</text>
+
+  <!-- terminal chips -->
+  <g font-size="18" fill="#adbac7">
+    <rect x="80"  y="556" width="118" height="40" rx="8" fill="#21262d"/><text x="139" y="582" text-anchor="middle">Ghostty</text>
+    <rect x="210" y="556" width="104" height="40" rx="8" fill="#21262d"/><text x="262" y="582" text-anchor="middle">iTerm2</text>
+    <rect x="326" y="556" width="150" height="40" rx="8" fill="#21262d"/><text x="401" y="582" text-anchor="middle">Terminal.app</text>
+    <rect x="488" y="556" width="92"  height="40" rx="8" fill="#21262d"/><text x="534" y="582" text-anchor="middle">Kitty</text>
+    <rect x="592" y="556" width="120" height="40" rx="8" fill="#21262d"/><text x="652" y="582" text-anchor="middle">WezTerm</text>
+    <rect x="724" y="556" width="84"  height="40" rx="8" fill="#21262d"/><text x="766" y="582" text-anchor="middle">tmux</text>
+    <rect x="820" y="556" width="92"  height="40" rx="8" fill="#21262d"/><text x="866" y="582" text-anchor="middle">cmux</text>
+  </g>
+
+  <!-- right badge -->
+  <g transform="translate(1152,236)">
+    <text x="0" y="0" font-size="21" font-weight="700" fill="#7ee787" text-anchor="end">ZERO DEPENDENCIES</text>
+    <text x="0" y="30" font-size="17" fill="#8b949e" text-anchor="end">stdlib + bash · MCP-native</text>
+  </g>
+</svg>
