@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="1.4.0"
 SCRIPT_NAME="claude-session-restore"
 
 # --- Paths (XDG-compliant, portable) ---
@@ -206,14 +206,13 @@ end tell" 2>/dev/null || true
             ;;
 
         cmux)
-            # cmux hat nativen Layout-Restore; delegiere ans cmux-vault toolchain.
-            # Der resume-safe Shim macht claude --resume ohnehin cwd-unabhaengig.
-            if command -v cmux-claude-resume-all &>/dev/null; then
-                cmux-claude-resume-all 2>/dev/null || true
-            elif command -v cmux-restore &>/dev/null; then
-                cmux-restore 2>/dev/null || true
+            # cmux: spawn a real workspace per session (native, no AppleScript).
+            # Falls cmux CLI fehlt -> universal fallback unten greift.
+            if command -v cmux &>/dev/null; then
+                cmux new-workspace --cwd "$cwd" --name "$window_id" \
+                    --command "$full_cmd" --focus false 2>/dev/null || true
             else
-                echo -e "  ${Y}cmux erkannt, aber cmux-vault toolchain fehlt im PATH${N}"
+                echo -e "  ${Y}cmux detected but cmux CLI not on PATH — skipping${N}"
             fi
             ;;
 
@@ -469,17 +468,44 @@ for w in data['windows']:
 new_plan() {
     local count="${1:-12}"
     local output="${2:-$SESSION_DIR/restore-all.json}"
+    local picks="${PLAN_PICKS:-0}"
 
-    python3 << PYEOF
+    PLAN_COUNT="$count" PLAN_PICKS="$picks" PLAN_OUT="$output" python3 << 'PYEOF'
 import json, glob, os, re, datetime
 
 projects_dir = os.path.expanduser("~/.claude/projects")
+COUNT  = int(os.environ.get("PLAN_COUNT", "12"))
+PICKS  = int(os.environ.get("PLAN_PICKS", "0"))
+OUT    = os.environ["PLAN_OUT"]
+
+# leverage keywords -> weight. prod/revenue/fix beat one-off chatter.
+LEVERAGE = {
+    "fix": 4, "prod": 5, "bug": 3, "deploy": 4, "revenue": 5, "umsatz": 5,
+    "strategy": 4, "strateg": 4, "biz": 3, "monetiz": 5, "launch": 3,
+    "meta": 3, "benchmark": 2, "optim": 3, "architect": 3, "security": 4,
+}
+
+# sessions currently live (skip — avoid double-restore). Best-effort,
+# terminal-agnostic: scan running `claude --session-id <sid>` cmdlines.
+def open_sids():
+    out = set()
+    try:
+        import subprocess
+        ps = subprocess.run(["ps", "-axo", "args="], capture_output=True,
+                             text=True, timeout=10).stdout
+        for m in re.finditer(r"--session-id\s+([0-9a-fA-F-]{36})", ps):
+            out.add(m.group(1))
+    except Exception:
+        pass
+    return out
+
+BUSY = open_sids()
 sessions, seen = [], set()
 
 for f in sorted(glob.glob(os.path.join(projects_dir, "*", "*.jsonl")), key=os.path.getmtime, reverse=True):
     if "/subagents/" in f: continue
     sid = os.path.basename(f).replace(".jsonl", "")
-    if sid in seen: continue
+    if sid in seen or sid in BUSY: continue
     seen.add(sid)
 
     # cwd AUTHORITATIV aus dem jsonl lesen (proj_dir.replace ist lossy:
@@ -511,32 +537,65 @@ for f in sorted(glob.glob(os.path.join(projects_dir, "*", "*.jsonl")), key=os.pa
         pd = os.path.basename(os.path.dirname(f)).replace("-", "/").lstrip("/")
         cwd = ("/" + pd) if os.path.isdir("/" + pd) else os.path.expanduser("~")
     if not title: title = f"Session {sid[:8]}"
+    if title.startswith("<") or "system-reminder" in title[:40]:
+        continue  # hook noise — not worth a window
 
-    sessions.append({"sid": sid, "cwd": cwd, "title": title, "size": os.path.getsize(f)})
-    if len(sessions) >= $count: break
+    lev = sum(w for kw, w in LEVERAGE.items() if kw in title.lower())
+    sessions.append({"sid": sid, "cwd": cwd, "title": title,
+                     "size": os.path.getsize(f), "lev": lev})
+    # gather a wider pool so leverage-picks have something to pull from
+    if len(sessions) >= COUNT + max(PICKS * 6, 0) + 30: break
+
+# newest COUNT, then PICKS highest-leverage from the remainder
+recent = sessions[:COUNT]
+rec_ids = {s["sid"] for s in recent}
+rest = sorted((s for s in sessions if s["sid"] not in rec_ids),
+              key=lambda s: (s["lev"], -sessions.index(s)), reverse=True)
+picks = [s for s in rest if s["lev"] > 0][:PICKS]
+chosen = [("recent", s) for s in recent] + [("leverage", s) for s in picks]
 
 windows = []
-for i, s in enumerate(sessions):
+for i, (kind, s) in enumerate(chosen):
     wid = f"s{i+1}-{s['sid'][:8]}"
     size_mb = f"{s['size'] / 1048576:.1f}M"
+    tag = "⭐ " if kind == "leverage" else ""
     windows.append({
         "id": wid, "type": "claude", "cwd": s["cwd"],
         "cmd": f"claude --resume {s['sid']}",
         "claude_session": s["sid"],
-        "label": f"{s['title']} ({size_mb})",
+        "label": f"{tag}{s['title']} ({size_mb})",
     })
 
 plan = {
     "name": "restore-all",
-    "description": f"Auto-generated: {len(windows)} sessions",
+    "description": f"Auto-generated: {len(windows)} sessions "
+                   f"({len(recent)} recent + {len(picks)} leverage)",
     "created": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "windows": windows
 }
-with open("$output", "w") as f: json.dump(plan, f, indent=2)
+with open(OUT, "w") as f: json.dump(plan, f, indent=2)
 
-print(f"Generated: {len(windows)} sessions -> $output")
+print(f"Generated: {len(windows)} sessions ({len(recent)} recent + "
+      f"{len(picks)} leverage) -> {OUT}")
+if BUSY: print(f"  (skipped {len(BUSY)} already-open session(s))")
 for w in windows: print(f"  [{w['id']}]  {w['label']}")
 PYEOF
+}
+
+# =============================================================================
+# rescue — ONE-SHOT universal restore: auto-rank + launch, any terminal,
+# zero config, zero plan file. The failsafe command.
+# =============================================================================
+
+rescue() {
+    local top="${1:-10}" picks="${2:-5}"
+    local plan="$SESSION_DIR/.rescue-plan.json"
+    local term; term=$(detect_terminal)
+    echo -e "${B}$SCRIPT_NAME v$VERSION — rescue${N}"
+    echo -e "  ${D}terminal: $term · top $top + $picks leverage picks${N}\n"
+    PLAN_PICKS="$picks" new_plan "$top" "$plan" || return 1
+    echo
+    launch_plan "$plan"
 }
 
 # =============================================================================
@@ -675,8 +734,10 @@ $SCRIPT_NAME v$VERSION — Cross-terminal session manager for Claude Code
 
 USAGE:  $(basename "$0") <command> [args]
 
-  launch [plan.json]   Restore sessions (default: restore-all.json)
-  new-plan [N] [out]   Generate plan from N most recent Claude sessions
+  rescue [TOP] [PICKS] ⚡ ONE-SHOT: auto-rank + restore, any terminal,
+                         zero config (default: 10 newest + 5 leverage picks)
+  launch [plan.json]   Restore sessions from a plan (default: restore-all.json)
+  new-plan [N] [out] [PICKS]  Generate plan: N newest + PICKS leverage-scored
   save [name]          Save current state
   status               Show tracked + live panes
   list                 Show saved sessions
@@ -712,8 +773,9 @@ export _PANE_DIR="$PANE_DIR" _SESSION_DIR="$SESSION_DIR" _VERSION="$VERSION"
 export _NAME="${2:-default}" _QUIET="${3:-}"
 
 case "${1:-help}" in
+    rescue)         rescue "${2:-10}" "${3:-5}" ;;
     launch)         launch_plan "${2:-}" ;;
-    new-plan)       new_plan "${2:-12}" "${3:-$SESSION_DIR/restore-all.json}" ;;
+    new-plan)       PLAN_PICKS="${4:-0}" new_plan "${2:-12}" "${3:-$SESSION_DIR/restore-all.json}" ;;
     save)           save_session "${2:-default}" "${3:-}" ;;
     restore)        launch_plan "$SESSION_DIR/${2:-default}.json" ;;
     detect)         show_detect ;;

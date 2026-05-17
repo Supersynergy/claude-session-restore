@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 G='\033[0;32m' C='\033[0;36m' Y='\033[1;33m' R='\033[0;31m' B='\033[1m' N='\033[0m'
@@ -52,7 +52,8 @@ if cp "$SCRIPT_DIR/mcp/cmux-rescue-mcp.py" "$MCP_DIR/cmux-rescue-mcp.py" 2>/dev/
     fi
 fi
 
-# Also create ghostty-session alias for backward compatibility
+# Short alias `csr` (used throughout the docs) + ghostty-session back-compat
+ln -sf "$INSTALL_DIR/claude-session-restore" "$INSTALL_DIR/csr" 2>/dev/null || true
 ln -sf "$INSTALL_DIR/claude-session-restore" "$INSTALL_DIR/ghostty-session" 2>/dev/null || true
 
 # --- 1.5. Install resume-safe Shim + Guard (v1.1 — der eigentliche Fix) ---

@@ -1,94 +1,102 @@
 # claude-session-restore
 
-> Restore Claude Code sessions across terminal restarts
+> **One command brings every Claude Code session back — in any terminal.**
 
-[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](https://github.com/supersynergy/claude-session-restore/releases)
+[![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)](https://github.com/supersynergy/claude-session-restore/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%2012--15-lightgrey.svg)](https://github.com/supersynergy/claude-session-restore)
-[![Shell](https://img.shields.io/badge/shell-bash%20%7C%20zsh-orange.svg)](https://github.com/supersynergy/claude-session-restore)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/supersynergy/claude-session-restore)
+[![Terminals](https://img.shields.io/badge/terminals-8%2B-success.svg)](#every-terminal-one-command)
+[![Deps](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)](#why-it-never-breaks)
 
-Pick up exactly where you left off. `claude-session-restore` automatically saves your Claude Code sessions and restores them — across reboots, terminal restarts, and crashes — in any terminal.
+Reboot, crash, terminal update, accidental close — your Claude Code work is
+not gone. `claude-session-restore` re-opens every conversation, in its own
+window/tab/workspace, **right where you left off**. No plan file to maintain,
+no daemon to babysit, no setup.
 
-```
-┌─ claude-session-restore v1.0.0 ──────────────────────────┐
-│  Restore sessions? (restore-all.json)                    │
-│  12 Sessions                                             │
-│  [Y]es / [n]o / [s]kip permanently                      │
-└──────────────────────────────────────────────────────────┘
+```text
+$ claude-session-restore rescue
+
+claude-session-restore v1.4.0 — rescue
+  terminal: ghostty · top 10 + 5 leverage picks
+
+Generated: 15 sessions (10 recent + 5 leverage)  (skipped 3 already-open)
+  [s1]  refactor auth middleware (2.1M)
+  [s2]  ⭐ fix prod outage — payments 500s (0.9M)
+  ...
+Launched 15 sessions via ghostty
 ```
 
 ---
 
-## Supported Terminals
+## Every terminal, one command
 
-| Terminal | Window Restore | Auto-Title | Auto-Save |
-|----------|:--------------:|:----------:|:---------:|
-| **Ghostty** | osascript (Cmd+N) | OSC 0 | |
-| **iTerm2** | AppleScript native | OSC 0 | |
-| **Terminal.app** | AppleScript `do script` | OSC 0 | |
-| **Kitty** | `kitty @ launch` | OSC 0 | |
-| **WezTerm** | `wezterm cli spawn` | OSC 0 | |
-| **Alacritty** | process spawn | OSC 0 | |
-| **tmux** | `tmux new-window` | window name | |
-| **cmux** | `cmux new-workspace` (via `cmux-rescue`) | workspace title | ✓ |
+`rescue` auto-detects where you are and uses that terminal's native spawn —
+no config, no flags.
+
+| Terminal | How sessions reopen |
+|----------|---------------------|
+| **Ghostty** | new window (osascript) |
+| **iTerm2** | native window (AppleScript) |
+| **Terminal.app** | `do script` |
+| **Kitty** | `kitty @ launch` |
+| **WezTerm** | `wezterm cli spawn` |
+| **Alacritty** | process spawn |
+| **tmux** | `tmux new-window` |
+| **cmux** | native `cmux new-workspace` |
+| **any other** | macOS frontmost-app fallback · Linux `$TERMINAL`/gnome/konsole/foot/xterm |
+
+The resume-safe **shim** makes `claude --resume` work from *any* directory,
+so restore is correct even where it isn't in this list.
 
 ---
 
-## cmux-rescue — zero-dependency failsafe (cmux.app)
-
-[cmux](https://github.com/manaflow-ai/cmux) wipes every workspace on app
-update / accidental window-close. The other restore paths (snapshot daemon,
-session-map, in-app server) each have a dependency that can be the very thing
-that broke. **`cmux-rescue` depends on nothing but `~/.claude/projects/`** —
-the transcript dir Claude itself always writes.
+## Quick rescue
 
 ```bash
-cmux-rescue                 # 10 newest + 5 leverage-scored picks (default)
-cmux-rescue --top 15        # 15 newest only
-cmux-rescue --all           # every closed session (cap 40)
-cmux-rescue --dry-run       # print the plan, spawn nothing
-cmux-rescue --restart       # quit+relaunch cmux first (launchd-owned, so it
-                            #   SURVIVES the quit), then restore
+claude-session-restore rescue            # 10 newest + 5 leverage picks
+claude-session-restore rescue 20 0       # 20 newest only
+claude-session-restore rescue 8 8        # 8 newest + 8 leverage picks
+csr rescue                               # short alias
 ```
 
-How it stays correct:
+What "leverage picks" means: beyond the newest N, it also pulls older
+sessions whose first message scores high on impact keywords
+(`fix`, `prod`, `revenue`, `deploy`, `security`, `strategy`, …) — so the
+session where you were fixing a production outage comes back even if it
+wasn't one of the last ten.
 
-- **Rank** sessions by `*.jsonl` mtime; drop subagents and empty/aborted ones.
-- **Leverage score** — `prod`/`fix`/`revenue`/`strategy` keywords boost picks.
-- **Dual dedup** — live `--session-id` (ps via cmux pids) **plus** normalized
-  workspace title. Run it twice → zero duplicates.
-- **`--restart` uses `launchctl submit`** so launchd is the parent process;
-  the classic failure (a `nohup` child dying together with cmux) is gone.
-- **Self-verify** — re-counts workspaces after, logs to `/tmp/cmux-rescue.log`.
+**Already-open sessions are skipped** (live `--session-id` scan), so
+`rescue` is idempotent — run it as often as you like, never get duplicates.
 
-Portable: no hardcoded paths. Override with `CLAUDE_PROJECTS_DIR` /
-`CMUX_BIN`. Installed automatically by `install.sh` (works even before
-cmux.app is present).
+### Why it never breaks
 
-Failsafe automation — run after every cmux restart (launchd `RunAtLoad`,
-or a shell-rc one-liner):
+Other restorers depend on a snapshot daemon, a session-map, or an in-app
+server — any of which can be the very thing that just died. `rescue` depends
+on **nothing but `~/.claude/projects/`**, the transcript directory Claude
+itself always writes. Zero runtime dependencies, pure stdlib + bash.
 
-```bash
-command -v cmux >/dev/null && cmux-rescue --top 10 --picks 5 >/dev/null 2>&1 &
-```
+cmux users get an extra hardened path, `cmux-rescue`, with
+`--restart` (quit + relaunch cmux via a launchd-owned helper that *survives*
+the quit) and `--all`. Run `cmux-rescue --help`.
 
 ---
 
-## MCP server (Claude Code / Cursor / Codex / Desktop)
+## MCP server — restore from inside any agent
 
 Zero-dependency stdio MCP — **stdlib only**, no `mcp` pip package, no
-framework. Same ethos as the CLI. Exposes 3 tools:
+framework. Works with Claude Code, Cursor, Codex, Claude Desktop.
 
 | Tool | Does |
 |------|------|
-| `list_sessions` | ranked restorable sessions (cwd · first msg · leverage), spawns nothing |
-| `cmux_rescue` | restore into cmux workspaces — `top` / `picks` / `all` / `dry_run` / `restart` |
-| `claude_session_restore` | drive the generic restorer — `detect` / `new-plan` / `launch` |
+| `rescue` | universal one-shot restore into the current terminal (`top`, `picks`) |
+| `list_sessions` | ranked restorable sessions (cwd · first msg · leverage) — spawns nothing |
+| `cmux_rescue` | cmux-native restore — `top`/`picks`/`all`/`dry_run`/`restart` |
+| `claude_session_restore` | drive the restorer — `detect`/`new-plan`/`launch`/`rescue` |
 
 Register with Claude Code (auto-done by `install.sh` if `claude` is on PATH):
 
 ```bash
-claude mcp add cmux-rescue -- python3 \
+claude mcp add -s user claude-session-restore -- python3 \
   ~/.local/share/claude-session-restore/cmux-rescue-mcp.py
 ```
 
@@ -97,7 +105,7 @@ Cursor / Claude Desktop — add to the MCP config:
 ```json
 {
   "mcpServers": {
-    "cmux-rescue": {
+    "claude-session-restore": {
       "command": "python3",
       "args": ["~/.local/share/claude-session-restore/cmux-rescue-mcp.py"]
     }
@@ -105,8 +113,8 @@ Cursor / Claude Desktop — add to the MCP config:
 }
 ```
 
-Then in any session: *"list my restorable sessions"* or *"rescue the top 10
-plus 5 leverage picks"* — the agent calls the tools directly.
+Then just say *"list my restorable sessions"* or *"rescue the top 10 plus 5
+leverage picks"* — the agent calls the tools directly.
 
 ---
 

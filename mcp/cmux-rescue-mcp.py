@@ -60,15 +60,31 @@ TOOLS = [
         },
     },
     {
+        "name": "rescue",
+        "description": "UNIVERSAL one-shot restore — auto-rank + spawn into "
+                       "the CURRENT terminal (cmux, Ghostty, iTerm2, "
+                       "Terminal.app, Kitty, WezTerm, Alacritty, tmux, Linux). "
+                       "Zero config, no plan file.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "top": {"type": "integer", "default": 10,
+                        "description": "N newest sessions"},
+                "picks": {"type": "integer", "default": 5,
+                          "description": "M extra leverage-scored picks"},
+            },
+        },
+    },
+    {
         "name": "claude_session_restore",
-        "description": "Drive the generic cross-terminal restorer "
-                       "(Ghostty/iTerm2/Kitty/WezTerm/tmux). "
-                       "subcommand one of: detect, new-plan, launch.",
+        "description": "Drive the universal cross-terminal restorer. "
+                       "subcommand one of: detect, new-plan, launch, rescue.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "subcommand": {"type": "string",
-                               "enum": ["detect", "new-plan", "launch"]},
+                               "enum": ["detect", "new-plan", "launch",
+                                        "rescue"]},
             },
             "required": ["subcommand"],
         },
@@ -109,11 +125,15 @@ def call_tool(name: str, args: dict) -> str:
         if args.get("restart"):
             argv.append("--restart")
         return _run(argv, timeout=300)
+    if name == "rescue":
+        return _run([CSR, "rescue",
+                     str(int(args.get("top", 10))),
+                     str(int(args.get("picks", 5)))], timeout=300)
     if name == "claude_session_restore":
         sub = str(args.get("subcommand", "")).strip()
-        if sub not in ("detect", "new-plan", "launch"):
-            return "ERROR: subcommand must be detect|new-plan|launch"
-        return _run([CSR, sub], timeout=180)
+        if sub not in ("detect", "new-plan", "launch", "rescue"):
+            return "ERROR: subcommand must be detect|new-plan|launch|rescue"
+        return _run([CSR, sub], timeout=300)
     return f"ERROR: unknown tool {name}"
 
 
