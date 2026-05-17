@@ -2,7 +2,7 @@
 
 > Restore Claude Code sessions across terminal restarts
 
-[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/supersynergy/claude-session-restore/releases)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](https://github.com/supersynergy/claude-session-restore/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2012--15-lightgrey.svg)](https://github.com/supersynergy/claude-session-restore)
 [![Shell](https://img.shields.io/badge/shell-bash%20%7C%20zsh-orange.svg)](https://github.com/supersynergy/claude-session-restore)
@@ -71,6 +71,42 @@ or a shell-rc one-liner):
 ```bash
 command -v cmux >/dev/null && cmux-rescue --top 10 --picks 5 >/dev/null 2>&1 &
 ```
+
+---
+
+## MCP server (Claude Code / Cursor / Codex / Desktop)
+
+Zero-dependency stdio MCP — **stdlib only**, no `mcp` pip package, no
+framework. Same ethos as the CLI. Exposes 3 tools:
+
+| Tool | Does |
+|------|------|
+| `list_sessions` | ranked restorable sessions (cwd · first msg · leverage), spawns nothing |
+| `cmux_rescue` | restore into cmux workspaces — `top` / `picks` / `all` / `dry_run` / `restart` |
+| `claude_session_restore` | drive the generic restorer — `detect` / `new-plan` / `launch` |
+
+Register with Claude Code (auto-done by `install.sh` if `claude` is on PATH):
+
+```bash
+claude mcp add cmux-rescue -- python3 \
+  ~/.local/share/claude-session-restore/cmux-rescue-mcp.py
+```
+
+Cursor / Claude Desktop — add to the MCP config:
+
+```json
+{
+  "mcpServers": {
+    "cmux-rescue": {
+      "command": "python3",
+      "args": ["~/.local/share/claude-session-restore/cmux-rescue-mcp.py"]
+    }
+  }
+}
+```
+
+Then in any session: *"list my restorable sessions"* or *"rescue the top 10
+plus 5 leverage picks"* — the agent calls the tools directly.
 
 ---
 

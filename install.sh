@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 G='\033[0;32m' C='\033[0;36m' Y='\033[1;33m' R='\033[0;31m' B='\033[1m' N='\033[0m'
@@ -33,6 +33,22 @@ if cp "$SCRIPT_DIR/bin/cmux-rescue" "$INSTALL_DIR/cmux-rescue" 2>/dev/null; then
         echo -e "${G}✓${N} cmux-rescue installed: ${C}${INSTALL_DIR}/cmux-rescue${N} (cmux detected)"
     else
         echo -e "${Y}!${N} cmux-rescue installed (cmux.app not found yet — usable when you adopt cmux)"
+    fi
+fi
+
+# --- 1.3 MCP server: zero-dep stdio JSON-RPC (stdlib only) ---
+MCP_DIR="$HOME/.local/share/claude-session-restore"
+mkdir -p "$MCP_DIR"
+if cp "$SCRIPT_DIR/mcp/cmux-rescue-mcp.py" "$MCP_DIR/cmux-rescue-mcp.py" 2>/dev/null; then
+    chmod +x "$MCP_DIR/cmux-rescue-mcp.py"
+    echo -e "${G}✓${N} MCP server installed: ${C}${MCP_DIR}/cmux-rescue-mcp.py${N}"
+    if command -v claude &>/dev/null; then
+        claude mcp add cmux-rescue -- python3 "$MCP_DIR/cmux-rescue-mcp.py" \
+            >/dev/null 2>&1 && \
+            echo -e "${G}✓${N} MCP registered with Claude Code (tool: cmux-rescue)" || \
+            echo -e "${Y}!${N} register manually: ${C}claude mcp add cmux-rescue -- python3 ${MCP_DIR}/cmux-rescue-mcp.py${N}"
+    else
+        echo -e "${Y}!${N} register: ${C}claude mcp add cmux-rescue -- python3 ${MCP_DIR}/cmux-rescue-mcp.py${N}"
     fi
 fi
 
