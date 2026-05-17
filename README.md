@@ -2,7 +2,7 @@
 
 > Restore Claude Code sessions across terminal restarts
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/supersynergy/claude-session-restore/releases)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/supersynergy/claude-session-restore/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2012--15-lightgrey.svg)](https://github.com/supersynergy/claude-session-restore)
 [![Shell](https://img.shields.io/badge/shell-bash%20%7C%20zsh-orange.svg)](https://github.com/supersynergy/claude-session-restore)
@@ -30,6 +30,47 @@ Pick up exactly where you left off. `claude-session-restore` automatically saves
 | **WezTerm** | `wezterm cli spawn` | OSC 0 | |
 | **Alacritty** | process spawn | OSC 0 | |
 | **tmux** | `tmux new-window` | window name | |
+| **cmux** | `cmux new-workspace` (via `cmux-rescue`) | workspace title | ✓ |
+
+---
+
+## cmux-rescue — zero-dependency failsafe (cmux.app)
+
+[cmux](https://github.com/manaflow-ai/cmux) wipes every workspace on app
+update / accidental window-close. The other restore paths (snapshot daemon,
+session-map, in-app server) each have a dependency that can be the very thing
+that broke. **`cmux-rescue` depends on nothing but `~/.claude/projects/`** —
+the transcript dir Claude itself always writes.
+
+```bash
+cmux-rescue                 # 10 newest + 5 leverage-scored picks (default)
+cmux-rescue --top 15        # 15 newest only
+cmux-rescue --all           # every closed session (cap 40)
+cmux-rescue --dry-run       # print the plan, spawn nothing
+cmux-rescue --restart       # quit+relaunch cmux first (launchd-owned, so it
+                            #   SURVIVES the quit), then restore
+```
+
+How it stays correct:
+
+- **Rank** sessions by `*.jsonl` mtime; drop subagents and empty/aborted ones.
+- **Leverage score** — `prod`/`fix`/`revenue`/`strategy` keywords boost picks.
+- **Dual dedup** — live `--session-id` (ps via cmux pids) **plus** normalized
+  workspace title. Run it twice → zero duplicates.
+- **`--restart` uses `launchctl submit`** so launchd is the parent process;
+  the classic failure (a `nohup` child dying together with cmux) is gone.
+- **Self-verify** — re-counts workspaces after, logs to `/tmp/cmux-rescue.log`.
+
+Portable: no hardcoded paths. Override with `CLAUDE_PROJECTS_DIR` /
+`CMUX_BIN`. Installed automatically by `install.sh` (works even before
+cmux.app is present).
+
+Failsafe automation — run after every cmux restart (launchd `RunAtLoad`,
+or a shell-rc one-liner):
+
+```bash
+command -v cmux >/dev/null && cmux-rescue --top 10 --picks 5 >/dev/null 2>&1 &
+```
 
 ---
 

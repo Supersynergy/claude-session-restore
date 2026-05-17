@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 G='\033[0;32m' C='\033[0;36m' Y='\033[1;33m' R='\033[0;31m' B='\033[1m' N='\033[0m'
@@ -22,6 +22,18 @@ if cp "$SCRIPT_DIR/bin/claude-session-restore" "$INSTALL_DIR/claude-session-rest
 else
     echo -e "${R}✗ Failed to install binary${N}"
     exit 1
+fi
+
+# --- 1.2 cmux-rescue: zero-dependency failsafe restorer (cmux.app users) ---
+# Depends on NOTHING but ~/.claude/projects (which Claude itself writes).
+# Survives cmux-quit (launchd-owned restart). Idempotent dual-dedup.
+if cp "$SCRIPT_DIR/bin/cmux-rescue" "$INSTALL_DIR/cmux-rescue" 2>/dev/null; then
+    chmod +x "$INSTALL_DIR/cmux-rescue"
+    if command -v cmux &>/dev/null; then
+        echo -e "${G}✓${N} cmux-rescue installed: ${C}${INSTALL_DIR}/cmux-rescue${N} (cmux detected)"
+    else
+        echo -e "${Y}!${N} cmux-rescue installed (cmux.app not found yet — usable when you adopt cmux)"
+    fi
 fi
 
 # Also create ghostty-session alias for backward compatibility

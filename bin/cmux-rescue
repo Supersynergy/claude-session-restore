@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""cmux-rescue — zero-dependency failsafe session restore.
+
+Why this exists (vs the other 3 restore paths):
+  - /bulk_restore server  → needs server alive INSIDE cmux + snapshot daemon
+  - cmux-claude-resume-all → needs session-map.jsonl + panel-UUID mapping
+  - old /tmp/*.sh detached → died when cmux quit (was a cmux child process)
+
+cmux-rescue depends on NOTHING but the Claude transcript dir, which Claude
+itself always writes. It ranks live sessions by mtime (+ optional leverage
+score), dedupes against currently-open workspaces, and spawns fresh
+`claude --resume` workspaces. Portable: no hardcoded user/paths.
+
+Usage:
+  cmux-rescue                       # 10 newest + 5 leverage picks (default)
+  cmux-rescue --top 15              # 15 newest only
+  cmux-rescue --top 10 --picks 5    # 10 newest + 5 leverage picks
+  cmux-rescue --dry-run             # show plan, spawn nothing
+  cmux-rescue --restart             # quit+relaunch cmux first (launchd-owned,
+                                    #   survives the quit), then restore
+  cmux-rescue --all                 # every session not already open (capped 40)
+
+Env overrides:
+  CLAUDE_PROJECTS_DIR  default ~/.claude/projects
+  CMUX_BIN             default: `which cmux`
+"""
+from __future__ import annotations
+import argparse, glob, json, os, re, shutil, subprocess, sys, time
+from pathlib import Path
+
+PROJ = Path(os.environ.get("CLAUDE_PROJECTS_DIR", str(Path.home() / ".claude/projects")))
+LOG = Path("/tmp/cmux-rescue.log")
+SID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F-]{20,40}$")
+# leverage keywords → weight. Production/revenue/strategy beat one-off chatter.
+LEVERAGE = {
+    "fix": 4, "prod": 5, "bug": 3, "deploy": 4, "revenue": 5, "umsatz": 5,
+    "strategy": 4, "strateg": 4, "biz": 3, "monetiz": 5, "skill": 2,
+    "meta": 3, "benchmark": 2, "optim": 3, "architektur": 3, "research": 1,
+}
+
+
+def log(msg: str) -> None:
+    line = f"{time.strftime('%H:%M:%S')} {msg}"
+    print(line)
+    try:
+        LOG.open("a").write(line + "\n")
+    except OSError:
+        pass
+
+
+def cmux_bin() -> str:
+    b = os.environ.get("CMUX_BIN") or shutil.which("cmux")
+    if not b:
+        log("FATAL: cmux CLI not found (set CMUX_BIN or install cmux.app)")
+        sys.exit(1)
+    return b
+
+
+def run(argv: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+
+
+def first_user_msg(fp: str) -> tuple[str, str]:
+    """Return (cwd, first real user message text[:75])."""
+    cwd = str(Path.home())
+    try:
+        with open(fp, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    d = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if d.get("cwd"):
+                    cwd = d["cwd"]
+                if d.get("type") == "user":
+                    c = d.get("message", {}).get("content", "")
+                    if isinstance(c, list):
+                        c = " ".join(
+                            x.get("text", "") for x in c
+                            if isinstance(x, dict) and x.get("type") == "text"
+                        )
+                    c = (c or "").strip()
+                    # skip hook noise / system reminders / caveman banner
+                    if (c and not c.startswith("<")
+                            and "system-reminder" not in c[:40]
+                            and "caveman" not in c[:30].lower()):
+                        return cwd, c.replace("\n", " ")[:75]
+    except OSError:
+        pass
+    return cwd, "(no user msg)"
+
+
+def rank_sessions() -> list[dict]:
+    """All top-level sessions, newest first, with cwd/summary/leverage."""
+    files = [
+        f for f in glob.glob(str(PROJ / "**/*.jsonl"), recursive=True)
+        if "/subagents/" not in f
+    ]
+    files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+    seen: set[str] = set()
+    out: list[dict] = []
+    for f in files:
+        sid = os.path.basename(f)[:-6]
+        if sid in seen or not SID_RE.match(sid):
+            continue
+        seen.add(sid)
+        cwd, msg = first_user_msg(f)
+        if msg == "(no user msg)":
+            continue  # empty/aborted session — not worth a workspace
+        lev = sum(w for kw, w in LEVERAGE.items() if kw in msg.lower())
+        out.append({
+            "sid": sid, "cwd": cwd, "msg": msg,
+            "mtime": os.path.getmtime(f), "lev": lev,
+        })
+    return out
+
+
+def _norm(s: str) -> str:
+    """strip status sigils + whitespace for name comparison."""
+    return re.sub(r"[\s⏱⭐✳⠐⠂⠠⠈*]+", " ", s).strip().lower()
+
+
+def open_state(cmux: str) -> tuple[set[str], set[str]]:
+    """(resumed_sids, open_workspace_name_norms) — dual dedup.
+
+    sids: best-effort from running `claude --resume` cmdlines.
+    names: normalized workspace titles (our restore names are msg-derived,
+    so a matching open title means that session is already live).
+    """
+    sids: set[str] = set()
+    names: set[str] = set()
+    try:
+        # cmux top → claude pids; ps → live `--session-id <sid>` (exact key).
+        # (running claude exposes --session-id, never --resume.)
+        r = run([cmux, "top", "--all", "--processes"], 15)
+        pids = re.findall(r"pid=(\d+)", r.stdout)
+        if pids:
+            ps = run(["ps", "-o", "args=", "-p", ",".join(pids)], 10)
+            for m in re.finditer(r"--session-id\s+([0-9a-fA-F-]{36})", ps.stdout):
+                sids.add(m.group(1))
+    except Exception:
+        pass
+    try:
+        r = run([cmux, "list-workspaces"], 15)
+        for line in r.stdout.splitlines():
+            # drop the leading `* workspace:NN ` ref, keep the title
+            t = re.sub(r"^\s*\*?\s*workspace:\d+\s+", "", line)
+            if t.strip():
+                names.add(_norm(t)[:50])
+    except Exception:
+        pass
+    return sids, names
+
+
+def restart_cmux(cmux: str) -> None:
+    """Quit + relaunch cmux via a launchd-owned one-shot so it SURVIVES the
+    quit (the old bug: nohup child of cmux died when cmux died)."""
+    label = "com.cmux.rescue.restart"
+    helper = "/tmp/cmux-rescue-restart.sh"
+    Path(helper).write_text(
+        "#!/bin/bash\n"
+        "set -u\n"
+        "osascript -e 'quit app \"cmux\"' 2>/dev/null || true\n"
+        "for i in $(seq 1 30); do pgrep -x cmux >/dev/null || break; sleep 1; done\n"
+        "pkill -x cmux 2>/dev/null || true; sleep 2\n"
+        "open -a cmux\n"
+        f"for i in $(seq 1 40); do '{cmux}' list-workspaces >/dev/null 2>&1 && break; sleep 1; done\n"
+        f"launchctl remove {label} 2>/dev/null || true\n"
+    )
+    os.chmod(helper, 0o755)
+    run(["launchctl", "remove", label], 5)
+    # launchctl submit → launchd is the parent → survives cmux quit
+    run(["launchctl", "submit", "-l", label, "--", "/bin/bash", helper], 10)
+    log(f"restart submitted to launchd ({label}); waiting for cmux socket…")
+    for _ in range(60):
+        if run([cmux, "list-workspaces"], 5).returncode == 0:
+            log("cmux back up")
+            time.sleep(2)
+            return
+        time.sleep(1)
+    log("WARN: cmux did not come back in 60s — continuing anyway")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(prog="cmux-rescue")
+    ap.add_argument("--top", type=int, default=10, help="N newest sessions")
+    ap.add_argument("--picks", type=int, default=5, help="M extra leverage picks")
+    ap.add_argument("--all", action="store_true", help="restore every closed session (cap 40)")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--restart", action="store_true", help="quit+relaunch cmux first")
+    ap.add_argument("--throttle", type=float, default=1.2, help="sec between spawns")
+    a = ap.parse_args()
+
+    cmux = cmux_bin()
+    if not PROJ.is_dir():
+        log(f"FATAL: {PROJ} not found")
+        sys.exit(1)
+
+    if a.restart and not a.dry_run:
+        restart_cmux(cmux)
+
+    ranked = rank_sessions()
+    if not ranked:
+        log("no resumable sessions found")
+        return
+    busy_sids, busy_names = open_state(cmux)
+
+    def is_open(s: dict) -> bool:
+        return s["sid"] in busy_sids or _norm(s["msg"])[:50] in busy_names
+
+    chosen: list[tuple[dict, str]] = []
+    if a.all:
+        for s in ranked:
+            if not is_open(s) and len(chosen) < 40:
+                chosen.append((s, "⏱"))
+    else:
+        pool = [s for s in ranked if not is_open(s)]
+        recent = pool[:a.top]
+        rec_ids = {s["sid"] for s in recent}
+        # leverage picks from the rest, highest score first, then recency
+        rest = sorted(
+            (s for s in pool if s["sid"] not in rec_ids),
+            key=lambda s: (s["lev"], s["mtime"]), reverse=True,
+        )
+        picks = [s for s in rest if s["lev"] > 0][:a.picks]
+        chosen = [(s, "⏱") for s in recent] + [(s, "⭐") for s in picks]
+
+    if not chosen:
+        log("nothing to restore (all candidates already open)")
+        return
+
+    log(f"plan: {len(chosen)} workspaces "
+        f"({sum(1 for _, t in chosen if t == '⏱')} recent, "
+        f"{sum(1 for _, t in chosen if t == '⭐')} leverage)"
+        + (" [DRY-RUN]" if a.dry_run else ""))
+    ok = 0
+    for s, tag in chosen:
+        name = f"{tag} {s['msg']}"[:60]
+        sid8 = s["sid"][:8]
+        if a.dry_run:
+            log(f"  would: {sid8} | {name}")
+            ok += 1
+            continue
+        try:
+            r = run([cmux, "new-workspace", "--cwd", s["cwd"],
+                     "--name", name, "--command", f"claude --resume {s['sid']}",
+                     "--focus", "false"])
+            if r.returncode == 0:
+                ok += 1
+                log(f"  + {sid8} {name}")
+            else:
+                log(f"  ! {sid8} rc={r.returncode} {r.stderr.strip()[:80]}")
+        except Exception as e:
+            log(f"  ! {sid8} {e}")
+        time.sleep(a.throttle)
+
+    # self-verify
+    if not a.dry_run:
+        n = run([cmux, "list-workspaces"]).stdout.count("workspace:")
+        log(f"done {ok}/{len(chosen)} — cmux now has {n} workspaces")
+    else:
+        log(f"dry-run done — {ok} would be restored")
+
+
+if __name__ == "__main__":
+    main()
