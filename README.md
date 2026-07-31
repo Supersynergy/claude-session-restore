@@ -1,10 +1,10 @@
 # claude-session-restore
 
 <p align="center">
-  <img src=".github/social-preview.png" alt="claude-session-restore — one command brings every Claude Code session back, in any terminal" width="820">
+  <img src=".github/social-preview.png" alt="claude-session-restore, one command brings every Claude Code session back, in any terminal" width="820">
 </p>
 
-> **One command brings every Claude Code session back — in any terminal.**
+> **One command brings every Claude Code session back, in any terminal.**
 
 [![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)](https://github.com/supersynergy/claude-session-restore/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -12,7 +12,7 @@
 [![Terminals](https://img.shields.io/badge/terminals-8%2B-success.svg)](#every-terminal-one-command)
 [![Deps](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)](#why-it-never-breaks)
 
-Reboot, crash, terminal update, accidental close — your Claude Code work is
+Reboot, crash, terminal update, accidental close, your Claude Code work is
 not gone. `claude-session-restore` re-opens every conversation, in its own
 window/tab/workspace, **right where you left off**. No plan file to maintain,
 no daemon to babysit, no setup.
@@ -65,17 +65,17 @@ csr rescue                               # short alias
 
 What "leverage picks" means: beyond the newest N, it also pulls older
 sessions whose first message scores high on impact keywords
-(`fix`, `prod`, `revenue`, `deploy`, `security`, `strategy`, …) — so the
+(`fix`, `prod`, `revenue`, `deploy`, `security`, `strategy`, …), so the
 session where you were fixing a production outage comes back even if it
 wasn't one of the last ten.
 
 **Already-open sessions are skipped** (live `--session-id` scan), so
-`rescue` is idempotent — run it as often as you like, never get duplicates.
+`rescue` is idempotent, run it as often as you like, never get duplicates.
 
 ### Why it never breaks
 
 Other restorers depend on a snapshot daemon, a session-map, or an in-app
-server — any of which can be the very thing that just died. `rescue` depends
+server, any of which can be the very thing that just died. `rescue` depends
 on **nothing but `~/.claude/projects/`**, the transcript directory Claude
 itself always writes. Zero runtime dependencies, pure stdlib + bash.
 
@@ -85,17 +85,17 @@ the quit) and `--all`. Run `cmux-rescue --help`.
 
 ---
 
-## MCP server — restore from inside any agent
+## MCP server: restore from inside any agent
 
-Zero-dependency stdio MCP — **stdlib only**, no `mcp` pip package, no
+Zero-dependency stdio MCP, **stdlib only**, no `mcp` pip package, no
 framework. Works with Claude Code, Cursor, Codex, Claude Desktop.
 
 | Tool | Does |
 |------|------|
 | `rescue` | universal one-shot restore into the current terminal (`top`, `picks`) |
-| `list_sessions` | ranked restorable sessions (cwd · first msg · leverage) — spawns nothing |
-| `cmux_rescue` | cmux-native restore — `top`/`picks`/`all`/`dry_run`/`restart` |
-| `claude_session_restore` | drive the restorer — `detect`/`new-plan`/`launch`/`rescue` |
+| `list_sessions` | ranked restorable sessions (cwd · first msg · leverage), spawns nothing |
+| `cmux_rescue` | cmux-native restore, `top`/`picks`/`all`/`dry_run`/`restart` |
+| `claude_session_restore` | drive the restorer, `detect`/`new-plan`/`launch`/`rescue` |
 
 Register with Claude Code (auto-done by `install.sh` if `claude` is on PATH):
 
@@ -104,7 +104,7 @@ claude mcp add -s user claude-session-restore -- python3 \
   ~/.local/share/claude-session-restore/cmux-rescue-mcp.py
 ```
 
-Cursor / Claude Desktop — add to the MCP config:
+Cursor / Claude Desktop, add to the MCP config:
 
 ```json
 {
@@ -118,13 +118,13 @@ Cursor / Claude Desktop — add to the MCP config:
 ```
 
 Then just say *"list my restorable sessions"* or *"rescue the top 10 plus 5
-leverage picks"* — the agent calls the tools directly.
+leverage picks"*, the agent calls the tools directly.
 
 ---
 
 ## Quick Start
 
-**Step 1 — Install**
+**Step 1, Install**
 
 ```bash
 git clone https://github.com/supersynergy/claude-session-restore.git
@@ -133,7 +133,7 @@ bash install.sh
 source ~/.zshrc
 ```
 
-**Step 2 — Generate your restore plan**
+**Step 2, Generate your restore plan**
 
 Scans your `~/.claude/projects/` and creates a plan from your 12 most recent sessions:
 
@@ -141,7 +141,7 @@ Scans your `~/.claude/projects/` and creates a plan from your 12 most recent ses
 claude-session-restore new-plan
 ```
 
-**Step 3 — Restore**
+**Step 3, Restore**
 
 Next time you open your terminal, you'll be prompted to restore. Or run manually:
 
@@ -215,8 +215,8 @@ Sessions are defined in a JSON plan file stored at `~/.local/share/ghostty-sessi
 ```
 
 Each entry can be:
-- `type: claude` — opens a window and resumes a specific Claude Code session
-- `type: shell` — opens a plain terminal window at `cwd`
+- `type: claude`, opens a window and resumes a specific Claude Code session
+- `type: shell`, opens a plain terminal window at `cwd`
 
 ### Terminal Detection
 
@@ -239,12 +239,12 @@ claude-session-restore detect
 
 ### Cascade Prevention
 
-The shell hook uses a 4-layer cascade prevention system to ensure the restore prompt only appears once per boot — not on every new window:
+The shell hook uses a 4-layer cascade prevention system to ensure the restore prompt only appears once per boot, not on every new window:
 
-1. **Daily skip flag** — `touch ~/.local/share/ghostty-sessions/.skip_restore_YYYYMMDD` to skip for a day
-2. **Boot-time comparison** — stale flags (pre-boot) are ignored
-3. **Lock file** — prevents concurrent restores
-4. **State file** — tracks last restore timestamp
+1. **Daily skip flag**, `touch ~/.local/share/ghostty-sessions/.skip_restore_YYYYMMDD` to skip for a day
+2. **Boot-time comparison**, stale flags (pre-boot) are ignored
+3. **Lock file**, prevents concurrent restores
+4. **State file**, tracks last restore timestamp
 
 ---
 
@@ -261,7 +261,7 @@ The shell hook (`shell-hook.sh`) is sourced from your `~/.zshrc` or `~/.bashrc` 
 | **Save on exit** | `trap` on HUP/EXIT saves before window closes |
 | **Auto-restore prompt** | On first window of fresh terminal start, prompts to restore |
 
-The hook is non-blocking — all registration calls run in the background and never slow down your prompt.
+The hook is non-blocking, all registration calls run in the background and never slow down your prompt.
 
 **Source manually:**
 
@@ -375,7 +375,7 @@ claude-session-restore trust /path/to/project
 
 ## License
 
-MIT — Copyright 2026 SuperSynergy
+MIT, Copyright 2026 SuperSynergy
 
 ---
 
