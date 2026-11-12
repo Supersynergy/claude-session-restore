@@ -1,7 +1,7 @@
 # claude-session-restore
 
 <p align="center">
-  <img src=".github/social-preview.png" alt="claude-session-restore, one command brings every Claude Code session back, in any terminal" width="820">
+  <img src=".github/social-preview.png" alt="Claude Session Restore" width="820">
 </p>
 
 [🚀 Quick start](#quick-start) · [🛟 Rescue](#quick-rescue) · [⚙️ Configuration](#configuration) · [🔧 Troubleshooting](#troubleshooting) · [License](#license)
