@@ -39,17 +39,38 @@ Launched 15 sessions via ghostty
 `rescue` auto-detects where you are and uses that terminal's native spawn —
 no config, no flags.
 
-| Terminal | How sessions reopen |
-|----------|---------------------|
-| **Ghostty** | new window (osascript) |
-| **iTerm2** | native window (AppleScript) |
-| **Terminal.app** | `do script` |
-| **Kitty** | `kitty @ launch` |
-| **WezTerm** | `wezterm cli spawn` |
-| **Alacritty** | process spawn |
-| **tmux** | `tmux new-window` |
-| **cmux** | native `cmux new-workspace` |
-| **any other** | macOS frontmost-app fallback · Linux `$TERMINAL`/gnome/konsole/foot/xterm |
+<details>
+<summary><strong>📋 Show 9 entries</strong></summary>
+
+- **Ghostty**<br>
+  How sessions reopen: new window (osascript)
+
+- **iTerm2**<br>
+  How sessions reopen: native window (AppleScript)
+
+- **Terminal.app**<br>
+  How sessions reopen: `do script`
+
+- **Kitty**<br>
+  How sessions reopen: `kitty @ launch`
+
+- **WezTerm**<br>
+  How sessions reopen: `wezterm cli spawn`
+
+- **Alacritty**<br>
+  How sessions reopen: process spawn
+
+- **tmux**<br>
+  How sessions reopen: `tmux new-window`
+
+- **cmux**<br>
+  How sessions reopen: native `cmux new-workspace`
+
+- **any other**<br>
+  How sessions reopen: macOS frontmost-app fallback · Linux `$TERMINAL`/gnome/konsole/foot/xterm
+
+</details>
+
 
 The resume-safe **shim** makes `claude --resume` work from *any* directory,
 so restore is correct even where it isn't in this list.
@@ -92,12 +113,23 @@ the quit) and `--all`. Run `cmux-rescue --help`.
 Zero-dependency stdio MCP, **stdlib only**, no `mcp` pip package, no
 framework. Works with Claude Code, Cursor, Codex, Claude Desktop.
 
-| Tool | Does |
-|------|------|
-| `rescue` | universal one-shot restore into the current terminal (`top`, `picks`) |
-| `list_sessions` | ranked restorable sessions (cwd · first msg · leverage), spawns nothing |
-| `cmux_rescue` | cmux-native restore, `top`/`picks`/`all`/`dry_run`/`restart` |
-| `claude_session_restore` | drive the restorer, `detect`/`new-plan`/`launch`/`rescue` |
+<details>
+<summary><strong>📋 Show 4 entries</strong></summary>
+
+- **`rescue`**<br>
+  Does: universal one-shot restore into the current terminal (`top`, `picks`)
+
+- **`list_sessions`**<br>
+  Does: ranked restorable sessions (cwd · first msg · leverage), spawns nothing
+
+- **`cmux_rescue`**<br>
+  Does: cmux-native restore, `top`/`picks`/`all`/`dry_run`/`restart`
+
+- **`claude_session_restore`**<br>
+  Does: drive the restorer, `detect`/`new-plan`/`launch`/`rescue`
+
+</details>
+
 
 Register with Claude Code (auto-done by `install.sh` if `claude` is on PATH):
 
@@ -155,17 +187,38 @@ claude-session-restore launch
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `claude-session-restore launch [plan.json]` | Restore sessions from plan (default: `restore-all.json`) |
-| `claude-session-restore new-plan [N] [out]` | Auto-generate plan from N most recent Claude sessions |
-| `claude-session-restore save [name]` | Save current session state |
-| `claude-session-restore status` | Show tracked windows + live panes |
-| `claude-session-restore list` | List all saved sessions |
-| `claude-session-restore delete <name>` | Delete a saved session |
-| `claude-session-restore detect` | Show detected terminal + capabilities |
-| `claude-session-restore trust [dir]` | Pre-accept Claude workspace trust dialog |
-| `claude-session-restore help` | Show help |
+<details>
+<summary><strong>📋 Show 9 entries</strong></summary>
+
+- **`claude-session-restore launch [plan.json]`**<br>
+  Description: Restore sessions from plan (default: `restore-all.json`)
+
+- **`claude-session-restore new-plan [N] [out]`**<br>
+  Description: Auto-generate plan from N most recent Claude sessions
+
+- **`claude-session-restore save [name]`**<br>
+  Description: Save current session state
+
+- **`claude-session-restore status`**<br>
+  Description: Show tracked windows + live panes
+
+- **`claude-session-restore list`**<br>
+  Description: List all saved sessions
+
+- **`claude-session-restore delete <name>`**<br>
+  Description: Delete a saved session
+
+- **`claude-session-restore detect`**<br>
+  Description: Show detected terminal + capabilities
+
+- **`claude-session-restore trust [dir]`**<br>
+  Description: Pre-accept Claude workspace trust dialog
+
+- **`claude-session-restore help`**<br>
+  Description: Show help
+
+</details>
+
 
 ### Aliases (set up automatically by shell hook)
 
@@ -254,14 +307,29 @@ The shell hook uses a 4-layer cascade prevention system to ensure the restore pr
 
 The shell hook (`shell-hook.sh`) is sourced from your `~/.zshrc` or `~/.bashrc` and provides:
 
-| Feature | How |
-|---------|-----|
-| **Auto-name** | Every new window gets a unique name (`project-1234`) |
-| **Terminal title** | OSC 0 escape sequence updates the tab/window title |
-| **Pane registration** | Every prompt reports current CWD + active Claude session |
-| **Auto-save** | Every 5 minutes, silently saves state to `.autosave.json` |
-| **Save on exit** | `trap` on HUP/EXIT saves before window closes |
-| **Auto-restore prompt** | On first window of fresh terminal start, prompts to restore |
+<details>
+<summary><strong>📋 Show 6 entries</strong></summary>
+
+- **Auto-name**<br>
+  How: Every new window gets a unique name (`project-1234`)
+
+- **Terminal title**<br>
+  How: OSC 0 escape sequence updates the tab/window title
+
+- **Pane registration**<br>
+  How: Every prompt reports current CWD + active Claude session
+
+- **Auto-save**<br>
+  How: Every 5 minutes, silently saves state to `.autosave.json`
+
+- **Save on exit**<br>
+  How: `trap` on HUP/EXIT saves before window closes
+
+- **Auto-restore prompt**<br>
+  How: On first window of fresh terminal start, prompts to restore
+
+</details>
+
 
 The hook is non-blocking, all registration calls run in the background and never slow down your prompt.
 
@@ -285,20 +353,42 @@ source ~/.local/share/ghostty-sessions/shell-hook.sh
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CLAUDE_SESSION_MAX_WINDOWS` | `16` | Maximum windows to restore in one run |
-| `XDG_DATA_HOME` | `~/.local/share` | Base path for session data |
+<details>
+<summary><strong>📋 Show 2 entries</strong></summary>
+
+- **`CLAUDE_SESSION_MAX_WINDOWS`**<br>
+  Default: `16`<br>
+  Description: Maximum windows to restore in one run
+
+- **`XDG_DATA_HOME`**<br>
+  Default: `~/.local/share`<br>
+  Description: Base path for session data
+
+</details>
+
 
 ### File Locations
 
-| Path | Description |
-|------|-------------|
-| `~/.local/share/ghostty-sessions/restore-all.json` | Main restore plan |
-| `~/.local/share/ghostty-sessions/.autosave.json` | Auto-saved state |
-| `~/.local/share/ghostty-sessions/.state.json` | Runtime state (tracked windows) |
-| `~/.local/share/ghostty-sessions/panes/` | Live pane registry |
-| `~/.local/bin/claude-session-restore` | Installed binary |
+<details>
+<summary><strong>📋 Show 5 entries</strong></summary>
+
+- **`~/.local/share/ghostty-sessions/restore-all.json`**<br>
+  Description: Main restore plan
+
+- **`~/.local/share/ghostty-sessions/.autosave.json`**<br>
+  Description: Auto-saved state
+
+- **`~/.local/share/ghostty-sessions/.state.json`**<br>
+  Description: Runtime state (tracked windows)
+
+- **`~/.local/share/ghostty-sessions/panes/`**<br>
+  Description: Live pane registry
+
+- **`~/.local/bin/claude-session-restore`**<br>
+  Description: Installed binary
+
+</details>
+
 
 ### Custom Plan Location
 
