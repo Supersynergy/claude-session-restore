@@ -4,13 +4,15 @@
   <img src=".github/social-preview.png" alt="claude-session-restore, one command brings every Claude Code session back, in any terminal" width="820">
 </p>
 
+[🚀 Quick start](#quick-start) · [🛟 Rescue](#quick-rescue) · [⚙️ Configuration](#configuration) · [🔧 Troubleshooting](#troubleshooting) · [License](#license)
+
 > **One command brings every Claude Code session back, in any terminal.**
 
 [![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)](https://github.com/supersynergy/claude-session-restore/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/supersynergy/claude-session-restore)
 [![Terminals](https://img.shields.io/badge/terminals-8%2B-success.svg)](#every-terminal-one-command)
-[![Deps](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)](#why-it-never-breaks)
+[![Deps](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)](#how-recovery-finds-your-sessions)
 
 Reboot, crash, terminal update, accidental close, your Claude Code work is
 not gone. `claude-session-restore` re-opens every conversation, in its own
@@ -72,7 +74,7 @@ wasn't one of the last ten.
 **Already-open sessions are skipped** (live `--session-id` scan), so
 `rescue` is idempotent, run it as often as you like, never get duplicates.
 
-### Why it never breaks
+### How recovery finds your sessions
 
 Other restorers depend on a snapshot daemon, a session-map, or an in-app
 server, any of which can be the very thing that just died. `rescue` depends
