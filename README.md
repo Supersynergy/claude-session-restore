@@ -1,8 +1,9 @@
+<p align="center">
+  <img src=".github/social-preview.png" alt="Claude Session Restore" width="960">
+</p>
+
 # claude-session-restore
 
-<p align="center">
-  <img src=".github/social-preview.png" alt="Claude Session Restore" width="820">
-</p>
 
 [🚀 Quick start](#quick-start) · [🛟 Rescue](#quick-rescue) · [⚙️ Configuration](#configuration) · [🔧 Troubleshooting](#troubleshooting) · [License](#license)
 
